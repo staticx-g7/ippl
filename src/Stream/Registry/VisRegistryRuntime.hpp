@@ -100,8 +100,9 @@ namespace detail {
     template<class L, class V, class... Rest>
     void add_pairs(VisRegistryRuntime& r, L&& label, V&& value, Rest&&... rest) {
         using DV = typename std::decay<V>::type;
-        static_assert(AllowedVisTypeOrShared_v<DV> || std::is_enum_v<DV>,
-                      "VisRegistryRuntime: unsupported value type in factory");
+        if constexpr (!(AllowedVisTypeOrShared_v<DV> || std::is_enum_v<DV>)) {
+            static_assert(always_false_v<DV>, "VisRegistryRuntime: unsupported value type in factory");
+        }
 
         // Materialize label as std::string to avoid ambiguous overloads
         std::string lbl{std::forward<L>(label)};

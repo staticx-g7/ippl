@@ -150,10 +150,12 @@ void CatalystAdaptor::init_entry( [[maybe_unused]]  const Field<T, Dim, ViewArgs
             args.append().set_string(channelName);
             args.append().set_string("--label");
             args.append().set_string(label);
+            #ifdef TestName
             if(TestName){
                 args.append().set_string("--experiment_name");
                 args.append().set_string(std::string(TestName));
             }
+            #endif
 
             args.append().set_string("--verbosity");
             args.append().set_string(std::to_string(ca_m.getOutputLevel()));
@@ -191,10 +193,12 @@ void CatalystAdaptor::init_entry( [[maybe_unused]]  const Field<Vector<T, Dim_v>
             args.append().set_string(channelName);
             args.append().set_string("--label");
             args.append().set_string(label);
+            #ifdef TestName
             if(TestName){
                 args.append().set_string("--experiment_name");
                 args.append().set_string(std::string(TestName));
             }
+            #endif
             args.append().set_string("--verbosity");
             args.append().set_string(std::to_string(ca_m.getOutputLevel()));
         }
@@ -235,10 +239,12 @@ void CatalystAdaptor::init_entry( [[maybe_unused]]  const T& entry, const std::s
                     args.append().set_string("--label");
                     args.append().set_string(label);
 
+                #ifdef TestName
                 if(TestName){
                     args.append().set_string("--experiment_name");
                     args.append().set_string(std::string(TestName));
                 }
+                #endif
 
                 args.append().set_string("--verbosity");
                 args.append().set_string(std::to_string(ca_m.getOutputLevel()));

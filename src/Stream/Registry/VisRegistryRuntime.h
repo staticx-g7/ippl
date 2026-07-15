@@ -18,6 +18,8 @@
 #include <vector>
 #include <type_traits>
 #include <utility>
+
+template<class T> inline constexpr bool always_false_v = false;
 #include <functional>
 #include <cassert>
 
