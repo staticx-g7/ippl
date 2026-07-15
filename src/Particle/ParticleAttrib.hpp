@@ -21,25 +21,122 @@
 
 namespace ippl {
 
+
+
+
+
+
+#ifdef IPPL_ENABLE_CATALYST
+            /* cant use reequires since using it here means having to use in derived class as well
+            and using it in derived class means having to use it in base class as well which does not make sense
+            so we switched to SFINAE approach instead */
+            // requires(!std::is_scalar_v<T>)
+
+            // In general, for runtime performance, neither function overloading nor if 
+            // constexpr has an inherent advantage when used correctly for compile-time 
+            // dispatch. Both eliminate runtime overhead compared to dynamic checks (like 
+            // function pointers or switch statements).
+            // function overloading with template parameter extraction or constraints or sfinae 
+            // are all pretty impossible to use in this case so we switched to if const expr
+
+            // In general, for runtime performance, neither function overloading nor if constexpr
+            //  has an inherent advantage when used correctly for compile-time dispatch. 
+            //  Both eliminate runtime overhead compared to dynamic checks 
+            // (like function pointers or switch statements).
+
+
+
     template <typename T, class... Properties>
-    void ParticleAttrib<T, Properties...>::create(size_type n, bool non_destructive) {
+    void ParticleAttrib<T, Properties...>::signConduitBlueprintNode_rememberHostCopy(
+        const size_type Np_local, 
+        conduit_cpp::Node& node_fields, 
+        ViewRegistry& viewRegistry,
+        Inform& ca_m,
+        Inform& ca_warn,
+        const bool forceHostCopy
+    )  const 
+    {
+        HostMirror  hostMirror;
+        if(forceHostCopy){
+            hostMirror  = this->getHostMirror();
+            Kokkos::deep_copy(hostMirror ,  this->getView());
+        } else{
+            // Creates a host-accessible mirror view and copies the data from the device view to the host.
+            // comType HostMirror would let the function auto deduct the wanted space ...
+            hostMirror =   Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), this->getView());
+        }
+        auto field = node_fields[this->name_m];
+        // auto field = node_fields["tester"];
+        field["association"].set_string("vertex");
+        // must name a topology defined in the channel
+        field["topology"].set_string("p_unstructured_topo");
+        field["volume_dependent"].set_string("false");
+    
+    
+        if constexpr (std::is_scalar_v<T>) {
+            // --- SCALAR CASE ---
+          ca_m  << "::Execute()excute_entry() for attribute: "<<this->name_m << endl
+                << "                          call to:"  << endl
+                << "                          ParticleAttribute<"  << typeid(T).name()  << ">::signConduitBlueprintNode()" << endl;
+            
+            field["values"].set_external(hostMirror.data(), Np_local);
+
+
+        } else if constexpr (is_vector_v<T>) {
+            // --- VECTOR CASE ---
+          ca_m  << "::Execute()excute_entry() for attribute: "<<this->name_m << endl
+                << "                          call to:"  << endl
+                << "                          ParticleAttribute<ippl::vector<" << typeid(typename T::value_type).name()<<","<<T::dim<<">>::signConduitBlueprintNode()" << endl;
+
+                
+            // const size_t stride_bytes = sizeof(typename T::value_type)*T::dim;
+            using elem_t = std::remove_pointer_t<decltype(hostMirror.data())>;
+            //avoids padding etc
+            const size_t stride_bytes = sizeof(elem_t);
+            // static constexpr size_t stride_bytes = sizeof(elem_t);
+
+            if(Np_local>0){
+                                field["values/x"].set_external(&hostMirror.data()[0][0], Np_local, 0 , stride_bytes );
+                            if constexpr (T::dim>=2){
+                                //ca_m <<"2"<<endl;
+                                field["values/y"].set_external(&hostMirror.data()[0][1], Np_local, 0 ,  stride_bytes );
+                            }
+                            if constexpr (T::dim>=3) {
+                                // ca_m <<"3"<<endl;
+                                field["values/z"].set_external(&hostMirror.data()[0][2], Np_local, 0 ,  stride_bytes  );
+                            }
+            }else /* (Np_local=0) */ {
+
+
+            // Np_local is 0. We MUST provide valid, empty arrays for the gather to work.
+            using component_type = typename T::value_type;
+            
+
+                                     field["values/x"].set_external(static_cast<component_type*>(nullptr), 0);
+            if constexpr (T::dim>=2) field["values/y"].set_external(static_cast<component_type*>(nullptr), 0);
+            if constexpr (T::dim>=3) field["values/z"].set_external(static_cast<component_type*>(nullptr), 0);
+            }
+        } else {
+            // --- INVALID CASE ---
+            ca_warn << "::Execute()excute_entry() for attribute:"<<this->name_m << endl
+                    << "                          call to:"  << endl
+                    << "                          ParticleAttribute<"  << typeid(T).name()  << ">::signConduitBlueprintNode()" << endl
+                    << "                          For this type of Attribute the Conduit Blueprint description wasnt \n" 
+                    << "                          implemented in ippl. Therefore this type of attribute is not \n"
+                    << "                          supported for visualisation." << endl;
+        }
+        viewRegistry.set(hostMirror);
+        // node_fields.print();
+    }
+    #endif
+
+    template <typename T, class... Properties>
+    void ParticleAttrib<T, Properties...>::create(size_type n) {
         size_type required = *(this->localNum_mp) + n;
         if (this->size() < required) {
             int overalloc = Comm->getDefaultOverallocation();
-            if (non_destructive) {
-                // Kokkos::resize preserves existing entries when growing.
-                this->resize(required * overalloc);
-            } else {
-                // Kokkos::realloc is destructive (free + alloc, no copy).
-                this->realloc(required * overalloc);
-            }
+            this->realloc(required * overalloc);
         }
-    }
-
-    template <typename T, class... Properties>
-    void ParticleAttrib<T, Properties...>::alloc(size_type n) {
-        int overalloc = Comm->getDefaultOverallocation();
-        this->realloc(n * overalloc);
     }
 
     template <typename T, class... Properties>
@@ -48,11 +145,12 @@ namespace ippl {
                                                    size_type invalidCount) {
         // Replace all invalid particles in the valid region with valid
         // particles in the invalid region
-        auto dview        = dview_m;
         using policy_type = Kokkos::RangePolicy<execution_space>;
         Kokkos::parallel_for(
             "ParticleAttrib::destroy()", policy_type(0, invalidCount),
-            KOKKOS_LAMBDA(const size_t i) { dview(deleteIndex(i)) = dview(keepIndex(i)); });
+            KOKKOS_CLASS_LAMBDA(const size_t i) {
+                dview_m(deleteIndex(i)) = dview_m(keepIndex(i));
+            });
     }
 
     template <typename T, class... Properties>
@@ -63,12 +161,10 @@ namespace ippl {
             Kokkos::realloc(buf_m, size * overalloc);
         }
 
-        auto buf          = buf_m;
-        auto dview        = dview_m;
         using policy_type = Kokkos::RangePolicy<execution_space>;
         Kokkos::parallel_for(
             "ParticleAttrib::pack()", policy_type(0, size),
-            KOKKOS_LAMBDA(const size_t i) { buf(i) = dview(hash(i)); });
+            KOKKOS_CLASS_LAMBDA(const size_t i) { buf_m(i) = dview_m(hash(i)); });
         Kokkos::fence();
     }
 
@@ -82,23 +178,20 @@ namespace ippl {
         }
 
         size_type count   = *(this->localNum_mp);
-        auto buf          = buf_m;
-        auto dview        = dview_m;
         using policy_type = Kokkos::RangePolicy<execution_space>;
         Kokkos::parallel_for(
             "ParticleAttrib::unpack()", policy_type(0, nrecvs),
-            KOKKOS_LAMBDA(const size_t i) { dview(count + i) = buf(i); });
+            KOKKOS_CLASS_LAMBDA(const size_t i) { dview_m(count + i) = buf_m(i); });
         Kokkos::fence();
     }
 
     template <typename T, class... Properties>
     // KOKKOS_INLINE_FUNCTION
     ParticleAttrib<T, Properties...>& ParticleAttrib<T, Properties...>::operator=(T x) {
-        auto dview        = dview_m;
         using policy_type = Kokkos::RangePolicy<execution_space>;
         Kokkos::parallel_for(
             "ParticleAttrib::operator=()", policy_type(0, *(this->localNum_mp)),
-            KOKKOS_LAMBDA(const size_t i) { dview(i) = x; });
+            KOKKOS_CLASS_LAMBDA(const size_t i) { dview_m(i) = x; });
         return *this;
     }
 
@@ -107,13 +200,13 @@ namespace ippl {
     // KOKKOS_INLINE_FUNCTION
     ParticleAttrib<T, Properties...>& ParticleAttrib<T, Properties...>::operator=(
         detail::Expression<E, N> const& expr) {
-        const E expr_ = static_cast<const E&>(expr);
+        using capture_type = detail::CapturedExpression<E, N>;
+        capture_type expr_ = reinterpret_cast<const capture_type&>(expr);
 
-        auto dview        = dview_m;
         using policy_type = Kokkos::RangePolicy<execution_space>;
         Kokkos::parallel_for(
             "ParticleAttrib::operator=()", policy_type(0, *(this->localNum_mp)),
-            KOKKOS_LAMBDA(const size_t i) { dview(i) = expr_(i); });
+            KOKKOS_CLASS_LAMBDA(const size_t i) { dview_m(i) = expr_(i); });
         return *this;
     }
 
@@ -144,23 +237,21 @@ namespace ippl {
         const NDIndex<Dim>& lDom       = layout.getLocalNDIndex();
         const int nghost               = f.getNghost();
 
-        // using policy_type = Kokkos::RangePolicy<execution_space>;
+        //using policy_type = Kokkos::RangePolicy<execution_space>;
         const bool useHashView = hash_array.extent(0) > 0;
         if (useHashView && (iteration_policy.end() > hash_array.extent(0))) {
             Inform m("scatter");
-            m << "Hash array was passed to scatter, but size does not match iteration policy."
-              << endl;
+            m << "Hash array was passed to scatter, but size does not match iteration policy." << endl;
             ippl::Comm->abort();
         }
-        auto dview  = dview_m;
-        auto ppview = pp.getView();
         Kokkos::parallel_for(
-            "ParticleAttrib::scatter", iteration_policy, KOKKOS_LAMBDA(const size_t idx) {
+            "ParticleAttrib::scatter", iteration_policy,
+            KOKKOS_CLASS_LAMBDA(const size_t idx) {
                 // map index to possible hash_map
                 size_t mapped_idx = useHashView ? hash_array(idx) : idx;
 
                 // find nearest grid point
-                vector_type l                        = (ppview(mapped_idx) - origin) * invdx + 0.5;
+                vector_type l                        = (pp(mapped_idx) - origin) * invdx + 0.5;
                 Vector<int, Field::dim> index        = l;
                 Vector<PositionType, Field::dim> whi = l - index;
                 Vector<PositionType, Field::dim> wlo = 1.0 - whi;
@@ -168,7 +259,7 @@ namespace ippl {
                 Vector<size_t, Field::dim> args = index - lDom.first() + nghost;
 
                 // scatter
-                const value_type& val = dview(mapped_idx);
+                const value_type& val = dview_m(mapped_idx);
                 detail::scatterToField(std::make_index_sequence<1 << Field::dim>{}, view, wlo, whi,
                                        args, val);
             });
@@ -210,14 +301,12 @@ namespace ippl {
         const NDIndex<Dim>& lDom       = layout.getLocalNDIndex();
         const int nghost               = f.getNghost();
 
-        auto dview        = dview_m;
-        auto ppview       = pp.getView();
         using policy_type = Kokkos::RangePolicy<execution_space>;
         Kokkos::parallel_for(
             "ParticleAttrib::gather", policy_type(0, *(this->localNum_mp)),
-            KOKKOS_LAMBDA(const size_t idx) {
+            KOKKOS_CLASS_LAMBDA(const size_t idx) {
                 // find nearest grid point
-                vector_type l                        = (ppview(idx) - origin) * invdx + 0.5;
+                vector_type l                        = (pp(idx) - origin) * invdx + 0.5;
                 Vector<int, Field::dim> index        = l;
                 Vector<PositionType, Field::dim> whi = l - index;
                 Vector<PositionType, Field::dim> wlo = 1.0 - whi;
@@ -225,19 +314,21 @@ namespace ippl {
                 Vector<size_t, Field::dim> args = index - lDom.first() + nghost;
 
                 // gather
-                value_type gathered = detail::gatherFromField(
-                    std::make_index_sequence<1 << Field::dim>{}, view, wlo, whi, args);
+                value_type gathered = detail::gatherFromField(std::make_index_sequence<1 << Field::dim>{},
+                                                              view, wlo, whi, args);
                 if (addToAttribute) {
-                    dview(idx) += gathered;
+                    dview_m(idx) += gathered;
                 } else {
-                    dview(idx) = gathered;
+                    dview_m(idx)  = gathered;
                 }
             });
         IpplTimings::stopTimer(gatherTimer);
     }
 
     template <typename T, class... Properties>
-    void ParticleAttrib<T, Properties...>::applyPermutation(const hash_type& permutation) {
+    void ParticleAttrib<T, Properties...>::applyPermutation(
+        const hash_type& permutation) {
+
         const auto view = this->getView();
         const auto size = this->getParticleCount();
 
@@ -250,22 +341,24 @@ namespace ippl {
 
         Kokkos::fence();
 
-        Kokkos::deep_copy(Kokkos::subview(view, Kokkos::make_pair<size_type, size_type>(0, size)),
-                          temp);
+        Kokkos::deep_copy(Kokkos::subview(view, Kokkos::make_pair<size_type, size_type>(0, size)), temp);
     }
 
-    template <typename T, class... Properties>
-    void ParticleAttrib<T, Properties...>::internalCopy(const hash_type& indices) {
+    template<typename T, class... Properties>
+    void ParticleAttrib<T, Properties...>::internalCopy(
+        const hash_type &indices) {
         auto copySize = indices.size();
         create(copySize);
 
-        auto view       = this->getView();
+        auto view = this->getView();
         const auto size = this->getParticleCount();
 
         using policy_type = Kokkos::RangePolicy<execution_space>;
         Kokkos::parallel_for(
             "Copy to temp", policy_type(0, copySize),
-            KOKKOS_LAMBDA(const size_type& i) { view(size + i) = view(i); });
+            KOKKOS_LAMBDA(const size_type &i) {
+            view(size + i) = view(i);
+        });
 
         Kokkos::fence();
     }
@@ -280,7 +373,7 @@ namespace ippl {
      *
      * This overload preserves legacy functionality by providing a default iteration policy.
      * It calls the member scatter() with a default Kokkos::RangePolicy.
-     *
+     * 
      * @note The default behaviour is to scatter all particles without any custom index mapping.
      *
      * @tparam Attrib1 The type of the particle attribute.
@@ -291,21 +384,19 @@ namespace ippl {
      * @param f The field onto which the data is scattered.
      * @param pp The ParticleAttrib representing particle positions.
      */
-    template <typename Attrib1, typename Field, typename Attrib2,
-              typename policy_type = Kokkos::RangePolicy<typename Field::execution_space>>
+    template <typename Attrib1, typename Field, typename Attrib2, 
+                typename policy_type = Kokkos::RangePolicy<typename Field::execution_space>>
     inline void scatter(const Attrib1& attrib, Field& f, const Attrib2& pp) {
-        attrib.scatter(f, pp, policy_type(0, attrib.getParticleCount()));
+        attrib.scatter(f, pp, policy_type(0, attrib.getParticleCount())); 
     }
 
     /**
-     * @brief Non-class interface for scattering with a custom iteration policy and optional index
-     * array.
+     * @brief Non-class interface for scattering with a custom iteration policy and optional index array.
      *
      * This overload allows the caller to specify a custom `Kokkos::range_policy` and an optional
      * `ippl::hash_type` array. It forwards the parameters to the member scatter() function.
-     *
-     * @note See ParticleAttrib::scatter() for more information on the custom iteration
-     * functionality.
+     * 
+     * @note See ParticleAttrib::scatter() for more information on the custom iteration functionality.
      *
      * @tparam Attrib1 The type of the particle attribute.
      * @tparam Field The type of the field.
@@ -317,33 +408,33 @@ namespace ippl {
      * @param iteration_policy A custom `Kokkos::range_policy` defining the iteration range.
      * @param hash_array An optional `ippl::hash_type` array for index mapping.
      */
-    template <typename Attrib1, typename Field, typename Attrib2,
-              typename policy_type = Kokkos::RangePolicy<typename Field::execution_space>>
-    inline void scatter(const Attrib1& attrib, Field& f, const Attrib2& pp,
+    template <typename Attrib1, typename Field, typename Attrib2, 
+                typename policy_type = Kokkos::RangePolicy<typename Field::execution_space>>
+    inline void scatter(const Attrib1& attrib, Field& f, const Attrib2& pp, 
                         policy_type iteration_policy, typename Attrib1::hash_type hash_array = {}) {
         attrib.scatter(f, pp, iteration_policy, hash_array);
     }
 
     /**
      * @brief Non-class interface for gathering field data into a particle attribute.
-     *
+     * 
      * This interface calls the member ParticleAttrib::gather() function with the provided
      * parameters and preserving legacy behavior by assigning `addToAttribute` a default value.
-     *
+     * 
      * @note See ParticleAttrib::gather() for more information on the behavior of `addToAttribute`.
-     *
+     * 
      * @tparam Attrib1 The type of the particle attribute.
      * @tparam Field The type of the field.
      * @tparam Attrib2 The type of the particle position attribute.
      * @param attrib The particle attribute to gather data into.
      * @param f The field from which data is gathered.
      * @param pp The ParticleAttrib representing particle positions.
-     * @param addToAttribute If true, the gathered field value is added to the current attribute
-     * value; otherwise, the attribute value is overwritten.
+     * @param addToAttribute If true, the gathered field value is added to the current attribute value;
+     *                       otherwise, the attribute value is overwritten.
      */
     template <typename Attrib1, typename Field, typename Attrib2>
-    inline void gather(Attrib1& attrib, Field& f, const Attrib2& pp,
-                       const bool addToAttribute = false) {
+    inline void gather(Attrib1& attrib, Field& f, const Attrib2& pp, 
+                        const bool addToAttribute = false) {
         attrib.gather(f, pp, addToAttribute);
     }
 
@@ -351,12 +442,11 @@ namespace ippl {
     template <typename T, class... Properties>                    \
     T ParticleAttrib<T, Properties...>::name() {                  \
         T temp            = 0.0;                                  \
-        auto dview        = dview_m;                              \
         using policy_type = Kokkos::RangePolicy<execution_space>; \
         Kokkos::parallel_reduce(                                  \
             "fun", policy_type(0, *(this->localNum_mp)),          \
-            KOKKOS_LAMBDA(const size_t i, T& valL) {              \
-                T myVal = dview(i);                               \
+            KOKKOS_CLASS_LAMBDA(const size_t i, T& valL) {        \
+                T myVal = dview_m(i);                             \
                 op;                                               \
             },                                                    \
             Kokkos::fun<T>(temp));                                \

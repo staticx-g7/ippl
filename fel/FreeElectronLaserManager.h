@@ -323,6 +323,7 @@ public:
         #ifdef IPPL_ENABLE_CATALYST
         {
             auto runtime_vis_registry = ippl::MakeVisRegistryRuntimePtr(
+                "particles", *this->pcontainer_m,
                 "E",          this->fcontainer_m->getE(),
                 "B",          this->fcontainer_m->getB()
             );

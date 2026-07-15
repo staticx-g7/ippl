@@ -73,20 +73,22 @@ namespace ippl {
             void setParticleBC(bc_container_type bcs) { bcs_m = bcs; }
 
             /*!
-             * Return the current boundary conditions.
+             * Copy over the given boundary conditions.
+             * @param bcs are the boundary conditions
              */
             const bc_container_type& getParticleBC() const { return bcs_m; }
 
             /*!
              * Use the same boundary condition on each face
-             * @param bc is the boundary condition to apply on all faces
+             * @param bcs are the boundary conditions
              */
             void setParticleBC(BC bc) { bcs_m.fill(bc); }
 
             /*!
              * Apply the given boundary conditions to the current particle positions.
-             * @param R is the particle position attribute
-             * @param nr is the particle domain
+             * @tparam R is the particle position attribute
+             * @tparam nr is the NDRegion
+             * @param
              */
             void applyBC(const particle_position_type& R, const NDRegion<T, Dim>& nr);
 

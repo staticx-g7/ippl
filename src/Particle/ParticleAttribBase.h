@@ -14,18 +14,19 @@
 #ifndef IPPL_PARTICLE_ATTRIB_BASE_H
 #define IPPL_PARTICLE_ATTRIB_BASE_H
 
-#include <cstring>
-
 #include "Types/IpplTypes.h"
 #include "Types/ViewTypes.h"
 
 #include "Communicate/Archive.h"
 
+
+ #ifdef IPPL_ENABLE_CATALYST
+ #include <catalyst.hpp>
+ #include "Stream/Registry/ViewRegistry.h"
+ #endif
+
 namespace ippl {
     namespace detail {
-        // Maximum length for attribute names (including null terminator)
-        constexpr size_t ATTRIB_NAME_MAX_LEN = 64;
-
         template <typename MemorySpace = Kokkos::DefaultExecutionSpace::memory_space>
         class ParticleAttribBase {
             template <class... Properties>
@@ -35,6 +36,23 @@ namespace ippl {
             };
 
         public:
+            // ParticleAttribBase(){this->name = "UNNAMED";}
+
+            // virtual void set_name(const std::string & name_) = 0;
+            // virtual std::string get_name() const = 0;
+            
+            
+            #ifdef IPPL_ENABLE_CATALYST
+            virtual void signConduitBlueprintNode_rememberHostCopy(
+                              const size_type Np_local
+                            , conduit_cpp::Node& node_fields
+                            , ViewRegistry& viewRegistry
+                            , Inform& ca_m
+                            , Inform& ca_warn
+                            , const bool forceHostCopy
+                        )  const = 0;
+            #endif
+
             using hash_type       = ippl::detail::hash_type<MemorySpace>;
             using memory_space    = MemorySpace;
             using execution_space = typename memory_space::execution_space;
@@ -42,29 +60,13 @@ namespace ippl {
             template <typename... Properties>
             using with_properties = typename WithMemSpace<Properties...>::type;
 
-            KOKKOS_FUNCTION
-            ParticleAttribBase() {
-                const char* default_name = "UNNAMED_attribute";
-                for (size_t i = 0; i < ATTRIB_NAME_MAX_LEN && default_name[i] != '\0'; ++i) {
-                    name_m[i] = default_name[i];
-                    if (i + 1 < ATTRIB_NAME_MAX_LEN) {
-                        name_m[i + 1] = '\0';
-                    }
-                }
-            }
+            ParticleAttribBase(){this->name_m = "UNNAMED_attribute";}
 
-            virtual void set_name(const std::string& name_) = 0;
-
+            virtual void set_name(const std::string & name_) = 0;
+            
             virtual std::string get_name() const = 0;
 
-            // Allocate internal capacity for N particles. Does NOT touch the logical
-            // particle count (localNum_m on ParticleBase). Existing data is not preserved.
-            virtual void alloc(size_type) = 0;
-
-            // non_destructive=false (default) keeps the historical destructive-on-grow
-            // behavior (Kokkos::realloc). non_destructive=true uses Kokkos::resize so
-            // prior entries survive a capacity grow.
-            virtual void create(size_type, bool non_destructive = false) = 0;
+            virtual void create(size_type) = 0;
 
             virtual void destroy(const hash_type&, const hash_type&, size_type) = 0;
             virtual size_type packedSize(const size_type) const                 = 0;
@@ -89,7 +91,7 @@ namespace ippl {
 
         protected:
             const size_type* localNum_mp;
-            char name_m[ATTRIB_NAME_MAX_LEN];
+            std::string name_m;
         };
     }  // namespace detail
 }  // namespace ippl

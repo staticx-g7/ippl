@@ -16,7 +16,7 @@ namespace ippl {
     template <typename T, unsigned Dim>
     template <typename... Args, typename std::enable_if<sizeof...(Args) == Dim, bool>::type>
     KOKKOS_FUNCTION Vector<T, Dim>::Vector(const Args&... args)
-        : data_m{static_cast<T>(args)...} {}
+        : Vector({static_cast<T>(args)...}) {}
 
     template <typename T, unsigned Dim>
     template <typename E, size_t N>
@@ -34,6 +34,7 @@ namespace ippl {
 
     template <typename T, unsigned Dim>
     KOKKOS_FUNCTION Vector<T, Dim>::Vector(const std::initializer_list<T>& list) {
+        // PAssert(list.size() == Dim);
         unsigned int i = 0;
         for (auto& l : list) {
             data_m[i] = l;

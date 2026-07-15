@@ -23,15 +23,15 @@
 #ifndef IPPL_PARTICLE_SPATIAL_LAYOUT_H
 #define IPPL_PARTICLE_SPATIAL_LAYOUT_H
 
-#include <vector>
-
 #include "Types/IpplTypes.h"
 
-#include "Communicate/Window.h"
 #include "FieldLayout/FieldLayout.h"
 #include "Particle/ParticleBase.h"
 #include "Particle/ParticleLayout.h"
 #include "Region/RegionLayout.h"
+
+#include "Communicate/Window.h"
+#include <vector>
 
 namespace ippl {
 
@@ -61,7 +61,7 @@ namespace ippl {
 
     public:
         // constructor: this one also takes a Mesh
-        ParticleSpatialLayout(FieldLayout<Dim>&, Mesh&, bool fem = false);
+        ParticleSpatialLayout(FieldLayout<Dim>&, Mesh&);
 
         ParticleSpatialLayout()
             : detail::ParticleLayout<T, Dim, PositionProperties...>() {}
@@ -81,13 +81,14 @@ namespace ippl {
 
         //! The FieldLayout containing information on nearest neighbors
         FieldLayout_t& flayout_m;
-
+        
+        
         // Vector keeping track of the recieves from all ranks
         std::vector<size_type> nRecvs_m;
-
+  
         // MPI RMA window for one-sided communication
         mpi::rma::Window<mpi::rma::Active> window_m;
-
+        
         //! Type of the Kokkos view containing the local regions.
         using region_view_type = typename RegionLayout_t::view_type;
         //! Type of a single Region object.
@@ -116,15 +117,11 @@ namespace ippl {
          * @param ranks the integer view in which to store the destination ranks
          * @param invalid the boolean view in which to store whether each particle
          * is invalidated, i.e. needs to be sent to another rank
-         * @param nSends_dview the view storing per-rank send counts
-         * @param sends_dview the view storing per-rank send offsets
          * @return The total number of invalidated particles
          */
         template <typename ParticleContainer>
-        std::pair<size_type, size_type> locateParticles(const ParticleContainer& pc,
-                                                        locate_type& ranks, bool_type& invalid,
-                                                        locate_type& nSends_dview,
-                                                        locate_type& sends_dview) const;
+        std::pair<size_type,size_type> locateParticles(const ParticleContainer& pc, locate_type& ranks,
+                                  bool_type& invalid, locate_type& nSends_dview, locate_type& sends_dview) const;
 
         /*!
          * @param rank we sent to
@@ -144,3 +141,4 @@ namespace ippl {
 #include "Particle/ParticleSpatialLayout.hpp"
 
 #endif
+

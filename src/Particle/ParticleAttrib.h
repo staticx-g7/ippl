@@ -16,14 +16,25 @@
 #ifndef IPPL_PARTICLE_ATTRIB_H
 #define IPPL_PARTICLE_ATTRIB_H
 
-#include <cstring>
-
 #include "Expression/IpplExpressions.h"
 
 #include "Interpolation/CIC.h"
 #include "Particle/ParticleAttribBase.h"
 
 namespace ippl {
+
+
+
+template<class T>
+struct is_vector : std::false_type {};
+
+template<class V, unsigned Dim>
+struct is_vector<ippl::Vector<V, Dim>> : std::true_type {};
+
+template<class T>
+inline constexpr bool is_vector_v = is_vector<typename std::decay<T>::type>::value;
+
+
 
     // ParticleAttrib class definition
     template <typename T, class... Properties>
@@ -41,22 +52,29 @@ namespace ippl {
 
         using view_type = typename detail::ViewType<T, 1, Properties...>::view_type;
 
-        using host_mirror_type = typename view_type::host_mirror_type;
+        using HostMirror = typename view_type::host_mirror_type;
 
         using memory_space    = typename view_type::memory_space;
         using execution_space = typename view_type::execution_space;
 
         using size_type = detail::size_type;
 
-        // Create storage for M particle attributes. The storage is uninitialized.
-        // New items are appended to the end of the array. When non_destructive is
-        // true, existing entries are preserved across a capacity grow.
-        void create(size_type, bool non_destructive = false) override;
 
-        // Allocate capacity for n particles (multiplied by the default overallocation
-        // factor) without touching the logical particle count. Existing data is
-        // discarded.
-        void alloc(size_type) override;
+            #ifdef IPPL_ENABLE_CATALYST
+            void signConduitBlueprintNode_rememberHostCopy(
+                              const size_type Np_local
+                            , conduit_cpp::Node& node_fields
+                            , ViewRegistry& viewRegistry
+                            , Inform& ca_m
+                            , Inform& ca_warn
+                            , const bool forceHostCopy
+                        ) const override ;       
+            #endif
+
+
+        // Create storage for M particle attributes.  The storage is uninitialized.
+        // New items are appended to the end of the array.
+        void create(size_type) override;
 
         /*!
          * Particle deletion function. Partition the particles into a valid region
@@ -89,21 +107,11 @@ namespace ippl {
         }
         
         void resize(size_type n) { Kokkos::resize(dview_m, n); }
-
-        /*!
-         * @brief Reallocate the underlying view with a new size.
-         *
-         * This function reallocates the device view to a new size. Existing data is
-         * discarded and should not be relied upon after this call. Note that this function does not
-         * apply overallocation. For use from outside, call `ParticleAttrib::alloc(size_type)`
-         * instead.
-         *
-         * @param n The new size to allocate in the internal view.
-         */
+        
         void realloc(size_type n) { Kokkos::realloc(dview_m, n); }
 
         void print() {
-            host_mirror_type hview = Kokkos::create_mirror_view(dview_m);
+            HostMirror hview = Kokkos::create_mirror_view(dview_m);
             Kokkos::deep_copy(hview, dview_m);
             for (size_type i = 0; i < *(this->localNum_mp); ++i) {
                 std::cout << hview(i) << std::endl;
@@ -116,18 +124,11 @@ namespace ippl {
 
         const view_type& getView() const { return dview_m; }
 
-        host_mirror_type getHostMirror() const { return Kokkos::create_mirror(dview_m); }
+        HostMirror getHostMirror() const { return Kokkos::create_mirror(dview_m); }
+        
+        void  set_name(const std::string & name_) override { this->name_m = name_; }
 
-        void set_name(const std::string& name_) override {
-            size_t len = name_.size();
-            if (len >= detail::ATTRIB_NAME_MAX_LEN) {
-                len = detail::ATTRIB_NAME_MAX_LEN - 1;
-            }
-            std::memcpy(this->name_m, name_.c_str(), len);
-            this->name_m[len] = '\0';
-        }
-
-        std::string get_name() const override { return std::string(this->name_m); }
+        std::string get_name() const override { return this->name_m; }
 
         /*!
          * Assign the same value to the whole attribute.

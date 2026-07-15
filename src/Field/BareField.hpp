@@ -2,13 +2,11 @@
 // Class BareField
 //   A BareField consists of multple LFields and represents a field.
 //
-#ifndef IPPL_BARE_FIELD_HPP
-#define IPPL_BARE_FIELD_HPP
-
 #include "Ippl.h"
 
 #include <Kokkos_ReductionIdentity.hpp>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <utility>
 
@@ -16,8 +14,6 @@
 
 #include "Utility/Inform.h"
 #include "Utility/IpplInfo.h"
-
-#include "BareField.h"
 namespace Kokkos {
     template <typename T, unsigned Dim>
     struct reduction_identity<ippl::Vector<T, Dim>> {
@@ -28,10 +24,10 @@ namespace Kokkos {
             return ippl::Vector<T, Dim>(1);
         }
         KOKKOS_FORCEINLINE_FUNCTION static ippl::Vector<T, Dim> min() {
-            return ippl::Vector<T, Dim>(Kokkos::reduction_identity<T>::min());
+            return ippl::Vector<T, Dim>(std::numeric_limits<T>::infinity());
         }
         KOKKOS_FORCEINLINE_FUNCTION static ippl::Vector<T, Dim> max() {
-            return ippl::Vector<T, Dim>(Kokkos::reduction_identity<T>::max());
+            return ippl::Vector<T, Dim>(-std::numeric_limits<T>::infinity());
         }
     };
 }  // namespace Kokkos
@@ -174,7 +170,10 @@ namespace ippl {
 
     template <typename T, unsigned Dim, class... ViewArgs>
     BareField<T, Dim, ViewArgs...>& BareField<T, Dim, ViewArgs...>::operator=(T x) {
-        Kokkos::deep_copy(dview_m, x);
+        using index_array_type = typename RangePolicy<Dim, execution_space>::index_array_type;
+        ippl::parallel_for(
+            "BareField::operator=(T)", getRangePolicy(dview_m),
+            KOKKOS_CLASS_LAMBDA(const index_array_type& args) { apply(dview_m, args) = x; });
         return *this;
     }
 
@@ -182,13 +181,13 @@ namespace ippl {
     template <typename E, size_t N>
     BareField<T, Dim, ViewArgs...>& BareField<T, Dim, ViewArgs...>::operator=(
         const detail::Expression<E, N>& expr) {
-        const E expr_          = static_cast<const E&>(expr);
-        auto view              = dview_m;
+        using capture_type     = detail::CapturedExpression<E, N>;
+        capture_type expr_     = reinterpret_cast<const capture_type&>(expr);
         using index_array_type = typename RangePolicy<Dim, execution_space>::index_array_type;
         ippl::parallel_for(
-            "BareField::operator=(const Expression&)", getRangePolicy(view, nghost_m),
-            KOKKOS_LAMBDA(const index_array_type& args) {
-                apply(view, args) = apply(expr_, args);
+            "BareField::operator=(const Expression&)", getRangePolicy(dview_m, nghost_m),
+            KOKKOS_CLASS_LAMBDA(const index_array_type& args) {
+                apply(dview_m, args) = apply(expr_, args);
             });
         return *this;
     }
@@ -196,23 +195,12 @@ namespace ippl {
     template <typename T, unsigned Dim, class... ViewArgs>
     void BareField<T, Dim, ViewArgs...>::write(std::ostream& out) const {
         Kokkos::fence();
-        detail::write<T, Dim, ViewArgs...>(dview_m, out);
+        detail::write<T, Dim>(dview_m, out);
     }
 
     template <typename T, unsigned Dim, class... ViewArgs>
     void BareField<T, Dim, ViewArgs...>::write(Inform& inf) const {
         write(inf.getDestination());
-    }
-
-    template <typename T, unsigned Dim, class... ViewArgs>
-    void BareField<T, Dim, ViewArgs...>::write_as_list(std::ostream& out) const {
-        Kokkos::fence();
-        detail::write_as_list<T, Dim, ViewArgs...>(dview_m, out);
-    }
-
-    template <typename T, unsigned Dim, class... ViewArgs>
-    void BareField<T, Dim, ViewArgs...>::write_as_list(Inform& inf) const {
-        write_as_list(inf.getDestination());
     }
 
 #define DefineReduction(fun, name, op, MPI_Op)                                                 \
@@ -239,4 +227,3 @@ namespace ippl {
     DefineReduction(Prod, prod, valL *= myVal, std::multiplies)
 
 }  // namespace ippl
-#endif  // IPPL_BARE_FIELD_HPP
