@@ -16,8 +16,3 @@ namespace ippl {
 }  // namespace ippl
 
 #endif
-        typedef std::size_t size_type;
-    }
-}  // namespace ippl
-
-#endif
