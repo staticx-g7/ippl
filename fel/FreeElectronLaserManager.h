@@ -13,10 +13,18 @@
 #include "Config.h"
 #include "FELFieldContainer.hpp"
 #include "FELParticleContainer.hpp"
+
+#ifdef IPPL_ENABLE_CATALYST
+#include "Stream/InSitu/CatalystAdaptor.h"
+#endif
+#ifdef IPPL_HDF5
+#include "HDF5Writer.h"
+#else
+#include "VideoWriter.h"
+#endif
 #include "LorentzTransform.h"
 #include "MithraBunch.h"
 #include "Undulator.h"
-#include "VideoWriter.h"
 #include "datatypes.h"
 #include "units.h"
 
@@ -53,7 +61,7 @@ public:
         , frame_m(ippl::UniaxialLorentzframe<T, 2>::from_gamma(frame_gamma_m))
         , undulator_m(uparams_m, 2.0 * cfg.sigma_position[2] * frame_gamma_m * frame_gamma_m) {}
 
-    ~FreeElectronLaserManager() { video_m.close(); }
+    ~FreeElectronLaserManager() { output_m.close(); }
 
 protected:
     config m_config;
@@ -84,7 +92,17 @@ protected:
     ippl::undulator_parameters<T> uparams_m;    ///< Undulator parameters.
     ippl::UniaxialLorentzframe<T, 2> frame_m;   ///< Boost into the co-moving frame (z-axis).
     ippl::Undulator<T> undulator_m;             ///< Static undulator field model.
-    FELVideoWriter<T, Dim> video_m;             ///< Optional ffmpeg Poynting-flux video.
+
+#ifdef IPPL_ENABLE_CATALYST
+public:
+    ippl::CatalystAdaptor cat_vis;
+protected:
+#endif
+#ifdef IPPL_HDF5
+    FELHDF5Writer<T, Dim> output_m;             ///< Optional HDF5 visualization output.
+#else
+    FELVideoWriter<T, Dim> output_m;            ///< Optional ffmpeg Poynting-flux video.
+#endif
 
     // --- narrow-band (resonant) radiation power diagnostic state ---
     // MITHRA reports the FEL output power as a sliding-window single-frequency
@@ -302,10 +320,22 @@ public:
 
         m << "dt = " << this->dt_m << " nt = " << this->nt_m << endl;
 
+        #ifdef IPPL_ENABLE_CATALYST
+        {
+            auto runtime_vis_registry = ippl::MakeVisRegistryRuntimePtr(
+                "particles", *this->pcontainer_m,
+                "E",          this->fcontainer_m->getE(),
+                "B",          this->fcontainer_m->getB()
+            );
+            auto runtime_steer_registry = ippl::MakeVisRegistryRuntimePtr();
+            cat_vis.InitializeRuntime(runtime_vis_registry, runtime_steer_registry);
+        }
+        #endif
+
         initializeParticles();
 
-        // Open the ffmpeg pipe (rank 0, only if periodic output was requested).
-        video_m.open(this->m_config);
+        // Open rank-0 visualization output when periodic output was requested.
+        output_m.open(this->m_config);
 
         this->dump();
 
@@ -354,6 +384,10 @@ public:
         // 2. Advance the electromagnetic field one FDTD step.
         this->solver_m->solve();
 
+        #ifdef IPPL_ENABLE_CATALYST
+        cat_vis.ExecuteRuntime(this->it_m, this->time_m);
+        #endif
+
         // 3. Push particles with the self-consistent field plus the undulator
         //    field transformed into the co-moving frame.
         auto und = undulator_m;
@@ -366,16 +400,24 @@ public:
     }
 
     void dump() {
+        // These CSV files are rank-0 scalar diagnostics, complementary to the
+        // visualization frames: they store globally reduced time-series values
+        // every step, while HDF5/movie output stores frame data on output_rhythm.
         dumpRadiation();
         dumpRadiationBanded();
         dumpFELDiagnostics();
 
-        // Emit a video frame on the configured rhythm. writeFrame is collective,
+        // Emit visualization output on the configured rhythm. writeFrame is collective,
         // so every rank must reach it under the same condition.
         if (this->m_config.output_rhythm != 0
             && (this->it_m % (int)this->m_config.output_rhythm) == 0) {
-            video_m.writeFrame(this->it_m, *this->fcontainer_m, *this->pcontainer_m, frame_m,
-                               this->m_config, this->nr_m);
+#ifdef IPPL_HDF5
+            output_m.writeFrame(this->it_m, this->time_m, *this->fcontainer_m,
+                                *this->pcontainer_m, frame_m, this->m_config, this->nr_m);
+#else
+            output_m.writeFrame(this->it_m, *this->fcontainer_m, *this->pcontainer_m, frame_m,
+                                this->m_config, this->nr_m);
+#endif
         }
     }
 
@@ -410,6 +452,8 @@ public:
                      * unit_length_in_meters)
             * this->hr_m[0] * this->hr_m[1];
         double power_global = 0.0;
+        // Sum the exit-plane contribution across all z-domain ranks; rank 0 is
+        // the only writer, so the CSV is a single global time series.
         MPI_Reduce(&power_local, &power_global, 1, MPI_DOUBLE, MPI_SUM, 0,
                    ippl::Comm->getCommunicator());
 
@@ -424,9 +468,9 @@ public:
             csvout.precision(10);
             csvout.setf(std::ios::scientific, std::ios::floatfield);
             if (std::fabs(this->time_m) < 1e-14) {
-                csvout << "labframe_z, radiated_power_W" << endl;
+                csvout << "labframe_z_m,radiated_power_W" << endl;
             }
-            csvout << pos[2] * unit_length_in_meters << " " << power_global << endl;
+            csvout << pos[2] * unit_length_in_meters << "," << power_global << endl;
         }
         ippl::Comm->barrier();
     }
@@ -513,6 +557,8 @@ public:
                        * this->hr_m[0] * this->hr_m[1];
 
         double power_global = 0.0;
+        // Sum the resonant-band exit-plane contribution across ranks before
+        // writing one global diagnostic row.
         MPI_Reduce(&power_local, &power_global, 1, MPI_DOUBLE, MPI_SUM, 0,
                    ippl::Comm->getCommunicator());
 
@@ -527,9 +573,9 @@ public:
             csvout.precision(10);
             csvout.setf(std::ios::scientific, std::ios::floatfield);
             if (std::fabs(this->time_m) < 1e-14) {
-                csvout << "labframe_z, banded_power_W" << endl;
+                csvout << "labframe_z_m,banded_power_W" << endl;
             }
-            csvout << pos[2] * unit_length_in_meters << " " << power_global << endl;
+            csvout << pos[2] * unit_length_in_meters << "," << power_global << endl;
         }
         ippl::Comm->barrier();
     }
@@ -561,6 +607,8 @@ public:
             },
             sumcos, sumsin);
 
+        // All particle and field diagnostics below are reduced over the full
+        // MPI decomposition before rank 0 writes the CSV row.
         double gsumcos = 0.0, gsumsin = 0.0;
         ippl::Comm->reduce(sumcos, gsumcos, 1, std::plus<double>());
         ippl::Comm->reduce(sumsin, gsumsin, 1, std::plus<double>());
@@ -642,13 +690,13 @@ public:
             csvout.precision(10);
             csvout.setf(std::ios::scientific, std::ios::floatfield);
             if (std::fabs(this->time_m) < 1e-14) {
-                csvout << "labframe_z, bunching, max_E, field_energy, num_particles, "
-                          "centroid_z, rms_z, rms_perp, mean_gbz"
+                csvout << "labframe_z_m,bunching,max_E,field_energy,num_particles,"
+                          "centroid_z,rms_z,rms_perp,mean_gbz"
                        << endl;
             }
-            csvout << pos[2] * unit_length_in_meters << " " << bunching << " " << globalEmax << " "
-                   << fieldEnergy << " " << nGlobal << " " << cz << " " << rmsz << " " << rmsperp
-                   << " " << meangbz << endl;
+            csvout << pos[2] * unit_length_in_meters << "," << bunching << "," << globalEmax
+                   << "," << fieldEnergy << "," << nGlobal << "," << cz << "," << rmsz << ","
+                   << rmsperp << "," << meangbz << endl;
         }
         ippl::Comm->barrier();
     }
@@ -676,14 +724,23 @@ protected:
                 const ippl::Vector<T, Dim> pos = rview(p);
                 const T value                  = qview(p) / volume;
 
-                Kokkos::Array<size_t, Dim> cellIdx;
+                Kokkos::Array<int, Dim> cellIdx;
+                Kokkos::Array<int, Dim> localBase;
                 Kokkos::Array<T, Dim> xi;
+                bool inLocalAllocation = true;
                 for (unsigned d = 0; d < Dim; ++d) {
                     // Half-cell shift to match the Cell-centered field and the
                     // gather (see assemble_current_collocated).
                     const T gridpos = (pos[d] - origin[d]) / h[d] - T(0.5);
-                    cellIdx[d]      = static_cast<size_t>(Kokkos::floor(gridpos));
+                    cellIdx[d]      = static_cast<int>(Kokkos::floor(gridpos));
                     xi[d]           = gridpos - T(cellIdx[d]);
+                    localBase[d]    = cellIdx[d] - ldom.first()[d] + nghost;
+
+                    inLocalAllocation &= (localBase[d] >= 0);
+                    inLocalAllocation &= (localBase[d] + 1 < static_cast<int>(view.extent(d)));
+                }
+                if (!inLocalAllocation) {
+                    return;
                 }
                 for (unsigned corner = 0; corner < (1u << Dim); ++corner) {
                     size_t idx[Dim];
@@ -691,7 +748,7 @@ protected:
                     for (unsigned d = 0; d < Dim; ++d) {
                         const unsigned offset = (corner >> d) & 1u;
                         weight *= offset ? xi[d] : (T(1) - xi[d]);
-                        idx[d] = cellIdx[d] - ldom.first()[d] + nghost + offset;
+                        idx[d] = static_cast<size_t>(localBase[d] + offset);
                     }
                     Kokkos::atomic_add(&(ippl::apply(view, idx)[0]), value * weight);
                 }
