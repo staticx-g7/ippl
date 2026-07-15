@@ -49,4 +49,6 @@ namespace ippl {
 // FIMXE remove (only for backwards compatibility)
 #include "IpplCore.h"
 
+#include "Types/TypeTraits.h"
+
 #endif
