@@ -610,20 +610,14 @@ void CatalystAdaptor::execute_entry(const Field<T, Dim, ViewArgs...>& entry, con
 
                 //    Create a temporary, UNMANAGED N-D view
                 //    that wraps the 1D view's data. This is our copy target.
-                //    This constructor handles any rank automatically.
+                //    Only pass actual extents (Dim extents + remaining as 1 to avoid zero-sized dims).
                 HostMaskView_t hostMaskView_N_Rank(
                     hostMaskView1D.data(),
                     deviceMaskView.extent(0),
-                    deviceMaskView.extent(1),
-                    deviceMaskView.extent(2),
-                    deviceMaskView.extent(3),
-                    deviceMaskView.extent(4),
-                    deviceMaskView.extent(5),
-                    deviceMaskView.extent(6),
-                    deviceMaskView.extent(7) // Good for up to 8D
+                    (Dim >= 2) ? deviceMaskView.extent(1) : 1,
+                    (Dim >= 3) ? deviceMaskView.extent(2) : 1,
+                    1, 1, 1, 1, 1
                 );
-                // The 8-dim extent constructor is flexible for any dimension
-                // but eg 3 analog is not .... seems so
 
                 //    Perform the transforming D->H + R->L copy
                 //    (Device, LayoutRight) -> (Host, LayoutLeft)
@@ -776,9 +770,9 @@ void CatalystAdaptor::execute_entry(const T& entry, const std::string label)
     
 
         auto data =     channel["data/block_main"];
-        auto data_help =     channel["data/block_help"];
+        // auto data_help =     channel["data/block_help"];
         channel["assembly/main"] = "block_main";
-        channel["assembly/help"] = "block_help";
+        // channel["assembly/help"] = "block_help";
         // channel["assembly/ALL"].append().set_string("block_main");
         // channel["assembly/ALL"].append().set_string("block_help");
 
@@ -801,7 +795,7 @@ void CatalystAdaptor::execute_entry(const T& entry, const std::string label)
         using hostMirror_ID_t = typename IDAttrib_t::HostMirror;
         hostMirror_ID_t ID_hostMirror ;
 
-        if constexpr (particleContainer->EnableIDs){
+        if (particleContainer->EnableIDs){
 
             if(forceHostCopy[label]){
                 ID_hostMirror = particleContainer->ID.getHostMirror();
@@ -875,39 +869,39 @@ void CatalystAdaptor::execute_entry(const T& entry, const std::string label)
 
 
         /* CHECK IF PLAYOUT IS SPATIAL LAYOUT OR PURE LAYOUT */
-        if constexpr (has_getRegionLayout_v<PLayout_t>){
+        // if constexpr (has_getRegionLayout_v<PLayout_t>){
 
-            using RLayout_t  = PLayout_t::RegionLayout_t;
-            using NDRegion_t = RLayout_t::NDRegion_t;
-            constexpr unsigned dim_ = PLayout_t::dim;
-            // using value_type = PLayout_t::value_type;
-            const NDRegion_t ndr = particleContainer->getLayout().getRegionLayout().getDomain();
+        //     using RLayout_t  = PLayout_t::RegionLayout_t;
+        //     using NDRegion_t = RLayout_t::NDRegion_t;
+        //     constexpr unsigned dim_ = PLayout_t::dim;
+        //     // using value_type = PLayout_t::value_type;
+        //     const NDRegion_t ndr = particleContainer->getLayout().getRegionLayout().getDomain();
             
-            /* HELPER COORDINATES TO PASS THE BOUNDING BOX in vtk format*/
-            /* HELPER TOPOLOGY    TO PASS THE BOUNDING BOX (??even needed??)  in vtk format */
-            data_help["coordsets/bound_helper_coords/type"].set_string("uniform");
-            data_help["topologies/bound_helper_topo/coordset"].set_string("bound_helper_coords");
-            data_help["topologies/bound_helper_topo/type"].set_string("uniform");
-            /* create unfirom coordinate mesh only consisting of the corner points of the domain */ 
-            {
-                data_help["coordsets/bound_helper_coords/dims/i"].set(2);
-                data_help["coordsets/bound_helper_coords/spacing/dx"].set( ndr[0].max()  - ndr[0].min() );
-                data_help["coordsets/bound_helper_coords/origin/x"].set(   ndr[0].min() );
-                // data["topologies/bound_helper_topo/origin/x"].set(    ndr[0].min() );
-            }
-            if constexpr(dim_ >= 2){
-                data_help["coordsets/bound_helper_coords/dims/j"].set(2);
-                data_help["coordsets/bound_helper_coords/spacing/dy"].set( ndr[1].max()- ndr[1].min() );
-                data_help["coordsets/bound_helper_coords/origin/y"].set(   ndr[1].min()               );
-                // data["topologies/bound_helper_topo/origin/y"].set(    ndr[1].min()               );
-            }
-            if constexpr(dim_ >= 3){
-                data_help["coordsets/bound_helper_coords/dims/k"].set(2);
-                data_help["coordsets/bound_helper_coords/spacing/dz"].set( ndr[2].max()- ndr[1].min() );
-                data_help["coordsets/bound_helper_coords/origin/z"].set(   ndr[2].min()               );
-                // data["topologies/bound_helper_topo/origin/z"].set(    ndr[2].min()               );
-            }
-    } 
+        //     /* HELPER COORDINATES TO PASS THE BOUNDING BOX in vtk format*/
+        //     /* HELPER TOPOLOGY    TO PASS THE BOUNDING BOX (??even needed??)  in vtk format */
+        //     data_help["coordsets/bound_helper_coords/type"].set_string("uniform");
+        //     data_help["topologies/bound_helper_topo/coordset"].set_string("bound_helper_coords");
+        //     data_help["topologies/bound_helper_topo/type"].set_string("uniform");
+        //     /* create unfirom coordinate mesh only consisting of the corner points of the domain */ 
+        //     {
+        //         data_help["coordsets/bound_helper_coords/dims/i"].set(2);
+        //         data_help["coordsets/bound_helper_coords/spacing/dx"].set( ndr[0].max()  - ndr[0].min() );
+        //         data_help["coordsets/bound_helper_coords/origin/x"].set(   ndr[0].min() );
+        //         // data["topologies/bound_helper_topo/origin/x"].set(    ndr[0].min() );
+        //     }
+        //     if constexpr(dim_ >= 2){
+        //         data_help["coordsets/bound_helper_coords/dims/j"].set(2);
+        //         data_help["coordsets/bound_helper_coords/spacing/dy"].set( ndr[1].max()- ndr[1].min() );
+        //         data_help["coordsets/bound_helper_coords/origin/y"].set(   ndr[1].min()               );
+        //         // data["topologies/bound_helper_topo/origin/y"].set(    ndr[1].min()               );
+        //     }
+        //     if constexpr(dim_ >= 3){
+        //         data_help["coordsets/bound_helper_coords/dims/k"].set(2);
+        //         data_help["coordsets/bound_helper_coords/spacing/dz"].set( ndr[2].max()- ndr[1].min() );
+        //         data_help["coordsets/bound_helper_coords/origin/y"].set(   ndr[2].min()               );
+        //         // data["topologies/bound_helper_topo/origin/y"].set(    ndr[2].min()               );
+        //     }
+    // } 
     // else {
             /* will use raw particle data instead .. */
             /* or do we now anything like unit square ??? */

@@ -61,7 +61,12 @@ public:
         , frame_m(ippl::UniaxialLorentzframe<T, 2>::from_gamma(frame_gamma_m))
         , undulator_m(uparams_m, 2.0 * cfg.sigma_position[2] * frame_gamma_m * frame_gamma_m) {}
 
-    ~FreeElectronLaserManager() { output_m.close(); }
+    ~FreeElectronLaserManager() {
+        #ifdef IPPL_ENABLE_CATALYST
+        cat_vis.Finalize();
+        #endif
+        output_m.close();
+    }
 
 protected:
     config m_config;
@@ -384,10 +389,6 @@ public:
         // 2. Advance the electromagnetic field one FDTD step.
         this->solver_m->solve();
 
-        #ifdef IPPL_ENABLE_CATALYST
-        cat_vis.ExecuteRuntime(this->it_m, this->time_m);
-        #endif
-
         // 3. Push particles with the self-consistent field plus the undulator
         //    field transformed into the co-moving frame.
         auto und = undulator_m;
@@ -397,6 +398,10 @@ public:
             auto eb = und(pos);
             return lb.transform_EB(eb);
         });
+
+        #ifdef IPPL_ENABLE_CATALYST
+        cat_vis.ExecuteRuntime(this->it_m, this->time_m);
+        #endif
     }
 
     void dump() {
