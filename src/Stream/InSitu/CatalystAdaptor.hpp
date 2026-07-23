@@ -708,13 +708,7 @@ void CatalystAdaptor::execute_entry(const Field<T, Dim, ViewArgs...>& entry, con
         HostView_t hostMirrorFinal = (use_ghost_masks) ? getHostMirrorView_withGhosts() : getHostMirrorView_noGhosts();
             /* FOR BOTH CASES FINAL NODE SETTINS ARE DONE AND WE HAVE THE DATA INSIDE hostMirrorFinal */
         using elem_t = std::remove_pointer_t<decltype(hostMirrorFinal.data())>;
-            // will return size of vector and amounts of vectors (not double)
         const auto n_elems = hostMirrorFinal.size();
-            // Use true element size as stride (handles padding)
-        static constexpr size_t stride_bytes = sizeof(elem_t);
-            // offset is zero?? guaranteed?
-        const size_t offset = 0;
-
 
         field_node["association"].set_string(associate);
         field_node["topology"].set_string("fmesh_topo");
@@ -727,30 +721,23 @@ void CatalystAdaptor::execute_entry(const Field<T, Dim, ViewArgs...>& entry, con
             // Create contiguous AOS->SOA views for each vector component.
             // Strided set_external() creates a "strided" Conduit layout that
             // ParaView's vtkConduitArrayUtilities cannot convert to VTK.
-            auto comp_dims = [&]() {
-                if constexpr (Dim == 1)
-                    return std::make_tuple(hostMirrorFinal.extent(0), size_t(1), size_t(1));
-                else if constexpr (Dim == 2)
-                    return std::make_tuple(hostMirrorFinal.extent(0), hostMirrorFinal.extent(1), size_t(1));
-                else
-                    return std::make_tuple(hostMirrorFinal.extent(0), hostMirrorFinal.extent(1), hostMirrorFinal.extent(2));
-            }();
-            size_t c0, c1, c2;
-            std::tie(c0, c1, c2) = comp_dims;
+            using CompView_t = Kokkos::View<double*, Kokkos::HostSpace>;
+            CompView_t comp_x("vf_comp_x", n_elems);
+            CompView_t comp_y("vf_comp_y", n_elems);
+            CompView_t comp_z("vf_comp_z", n_elems);
 
-            using CompView_t = Kokkos::View<double*, Kokkos::LayoutLeft, Kokkos::HostSpace>;
-            CompView_t comp_x("vf_comp_x", c0, c1, c2);
-            CompView_t comp_y("vf_comp_y", c0, c1, c2);
-            CompView_t comp_z("vf_comp_z", c0, c1, c2);
+            const size_t nx = hostMirrorFinal.extent(0);
+            const size_t ny = (Dim >= 2) ? hostMirrorFinal.extent(1) : size_t(1);
+            const size_t nz = (Dim >= 3) ? hostMirrorFinal.extent(2) : size_t(1);
 
-            // Extract vector components by iterating over host-sequential data
-            for (size_t k = 0; k < c2; ++k)
-                for (size_t j = 0; j < c1; ++j)
-                    for (size_t i = 0; i < c0; ++i) {
+            for (size_t k = 0; k < nz; ++k)
+                for (size_t j = 0; j < ny; ++j)
+                    for (size_t i = 0; i < nx; ++i) {
                         const auto& v = hostMirrorFinal(i, j, k);
-                        comp_x(i, j, k) = v[0];
-                        if constexpr (T::dim >= 2) comp_y(i, j, k) = v[1];
-                        if constexpr (T::dim >= 3) comp_z(i, j, k) = v[2];
+                        size_t idx = i + j * nx + k * nx * ny;
+                        comp_x(idx) = v[0];
+                        if constexpr (T::dim >= 2) comp_y(idx) = v[1];
+                        if constexpr (T::dim >= 3) comp_z(idx) = v[2];
                     }
             viewRegistry.set(label + "_vf_comp_x", comp_x);
             if constexpr (T::dim >= 2) viewRegistry.set(label + "_vf_comp_y", comp_y);
@@ -892,12 +879,7 @@ void CatalystAdaptor::execute_entry(const T& entry, const std::string label)
 
 
 
-        using PLayout_t = T::Layout_t;
-        // using vector_t = T::Layout_t::vector_type;
-        // using value_t  = T::Layout_t::value_type;
-        //avoids padding etc
-        using R_elem_t = std::remove_pointer_t<decltype(R_hostMirror.data())>;
-        static constexpr size_t R_stride_bytes = sizeof(R_elem_t);
+         using PLayout_t = T::Layout_t;
 
 
         /* CHECK IF PLAYOUT IS SPATIAL LAYOUT OR PURE LAYOUT */
