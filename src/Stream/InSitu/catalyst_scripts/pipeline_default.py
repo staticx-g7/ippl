@@ -490,24 +490,32 @@ def catalyst_execute(info):
     global _extractors
     global _sources
     global _filters
-        
 
-    # Loop over all registered vis channels
+    # Check TrivialProducer sources for data availability
     for name, proxy in _sources.items():
-    # for name in _sources.keys():
-        # proxy = pm.GetProxy("sources", name)
-        # if not proxy:
-            #  _log(f"WARNING: proxy '{name}' not found in step {info.cycle}")
-            #  continue
-        
         proxy.UpdatePipeline()
         proxy.UpdateVTKObjects()
-
+        # Check data info on catalyst step 0
+        if info.cycle == 0:
+            try:
+                info_node = proxy.GetDataInformation()
+                bounds = info_node.GetBounds()
+                print_info_(f"  TrivialProducer '{name}' bounds={bounds}")
+                print_info_(f"  TrivialProducer '{name}' has {info_node.GetNumberOfPoints() if hasattr(info_node, 'GetNumberOfPoints') else '?'} points")
+            except Exception as e:
+                print_info_(f"  TrivialProducer '{name}' data info error: {e}")
+        proxy.Update()
 
     for name_, filter in _filters.items():
             filter.UpdatePipeline()
             filter.UpdateVTKObjects()
-
+            if info.cycle == 0:
+                try:
+                    # Check filter data after update
+                    out_info = filter.GetDataInformation()
+                    print_info_(f"  Filter '{name_}' bounds={out_info.GetBounds()}")
+                except Exception as e:
+                    print_info_(f"  Filter '{name_}' data info error: {e}")
 
 
     if parsed.steer == "ON" and  parsed.show_forward_channels == "ON":
