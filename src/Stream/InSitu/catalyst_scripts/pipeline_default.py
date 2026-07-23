@@ -501,10 +501,11 @@ def catalyst_execute(info):
                 info_node = proxy.GetDataInformation()
                 bounds = info_node.GetBounds()
                 print_info_(f"  TrivialProducer '{name}' bounds={bounds}")
-                print_info_(f"  TrivialProducer '{name}' has {info_node.GetNumberOfPoints() if hasattr(info_node, 'GetNumberOfPoints') else '?'} points")
+                point_data_info = info_node.GetPointDataInformation()
+                if point_data_info:
+                    print_info_(f"  TrivialProducer '{name}' has point data arrays")
             except Exception as e:
                 print_info_(f"  TrivialProducer '{name}' data info error: {e}")
-        proxy.Update()
 
     for name_, filter in _filters.items():
             filter.UpdatePipeline()
