@@ -88,34 +88,31 @@ namespace ippl {
                 << "                          call to:"  << endl
                 << "                          ParticleAttribute<ippl::vector<" << typeid(typename T::value_type).name()<<","<<T::dim<<">>::signConduitBlueprintNode()" << endl;
 
-                
-            // const size_t stride_bytes = sizeof(typename T::value_type)*T::dim;
-            using elem_t = std::remove_pointer_t<decltype(hostMirror.data())>;
-            //avoids padding etc
-            const size_t stride_bytes = sizeof(elem_t);
-            // static constexpr size_t stride_bytes = sizeof(elem_t);
+                // Create contiguous AOS->SOA views for particle vector attributes.
+                // Strided set_external() creates a "strided" Conduit layout that
+                // ParaView's vtkConduitArrayUtilities cannot convert to VTK.
+            using component_type = typename T::value_type;
+            using CompView_t = Kokkos::View<component_type*, Kokkos::HostSpace>;
+            CompView_t comp_x("att_comp_x", Np_local);
+            CompView_t comp_y("att_comp_y", Np_local);
+            CompView_t comp_z("att_comp_z", Np_local);
 
             if(Np_local>0){
-                                field["values/x"].set_external(&hostMirror.data()[0][0], Np_local, 0 , stride_bytes );
-                            if constexpr (T::dim>=2){
-                                //ca_m <<"2"<<endl;
-                                field["values/y"].set_external(&hostMirror.data()[0][1], Np_local, 0 ,  stride_bytes );
-                            }
-                            if constexpr (T::dim>=3) {
-                                // ca_m <<"3"<<endl;
-                                field["values/z"].set_external(&hostMirror.data()[0][2], Np_local, 0 ,  stride_bytes  );
-                            }
-            }else /* (Np_local=0) */ {
-
-
-            // Np_local is 0. We MUST provide valid, empty arrays for the gather to work.
-            using component_type = typename T::value_type;
-            
-
-                                     field["values/x"].set_external(static_cast<component_type*>(nullptr), 0);
-            if constexpr (T::dim>=2) field["values/y"].set_external(static_cast<component_type*>(nullptr), 0);
-            if constexpr (T::dim>=3) field["values/z"].set_external(static_cast<component_type*>(nullptr), 0);
+                for (size_t i = 0; i < Np_local; ++i) {
+                    const auto& v = hostMirror.data()[i];
+                    comp_x(i) = v[0];
+                    if constexpr (T::dim>=2) comp_y(i) = v[1];
+                    if constexpr (T::dim>=3) comp_z(i) = v[2];
+                }
             }
+            viewRegistry.set(this->name_m + "_att_comp_x", comp_x);
+            if constexpr (T::dim >= 2) viewRegistry.set(this->name_m + "_att_comp_y", comp_y);
+            if constexpr (T::dim >= 3) viewRegistry.set(this->name_m + "_att_comp_z", comp_z);
+
+            // Contiguous, no stride
+            field["values/x"].set_external(comp_x.data(), Np_local);
+            if constexpr (T::dim>=2) field["values/y"].set_external(comp_y.data(), Np_local);
+            if constexpr (T::dim>=3) field["values/z"].set_external(comp_z.data(), Np_local);
         } else {
             // --- INVALID CASE ---
             ca_warn << "::Execute()excute_entry() for attribute:"<<this->name_m << endl

@@ -1,4 +1,4 @@
-"""! \file pipeline_default.py
+r"""! \file pipeline_default.py
 \brief Main ParaView Catalyst pipeline: live visualization, VTK extracts, and steering.
 \details Discovers channel proxies, wires optional extractors, updates live views,
 and forwards/fetches steerable parameters between the simulation an        # Option 2: Extract only specific blocks (e.g., just particles without helper)

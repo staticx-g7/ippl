@@ -1,4 +1,4 @@
-"""! \file png_ext_particle.py
+r"""! \file png_ext_particle.py
 \brief Catalyst PNG extractor for 3D particles (ParticleContainer/ParticleBase).
 \details Visualizes particle point data with adaptive camera and velocity-based
 coloring. Expects 'position' and 'velocity' arrays and is orchestrated by

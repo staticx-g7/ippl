@@ -724,10 +724,42 @@ void CatalystAdaptor::execute_entry(const Field<T, Dim, ViewArgs...>& entry, con
             field_node["values"].set_external(hostMirrorFinal.data(), n_elems);
         } else if constexpr (is_vector_v<T>) {
             // --- VECTOR FIELD CASE ---
-                                    // stride was 1 in predecessor code? how did this work?...
-                                     field_node["values/x"].set_external(&hostMirrorFinal.data()[0][0], n_elems, offset, stride_bytes);
-            if constexpr (T::dim>=2) field_node["values/y"].set_external(&hostMirrorFinal.data()[0][1], n_elems, offset, stride_bytes);
-            if constexpr (T::dim>=3) field_node["values/z"].set_external(&hostMirrorFinal.data()[0][2], n_elems, offset, stride_bytes);        
+            // Create contiguous AOS->SOA views for each vector component.
+            // Strided set_external() creates a "strided" Conduit layout that
+            // ParaView's vtkConduitArrayUtilities cannot convert to VTK.
+            auto comp_dims = [&]() {
+                if constexpr (Dim == 1)
+                    return std::make_tuple(hostMirrorFinal.extent(0), size_t(1), size_t(1));
+                else if constexpr (Dim == 2)
+                    return std::make_tuple(hostMirrorFinal.extent(0), hostMirrorFinal.extent(1), size_t(1));
+                else
+                    return std::make_tuple(hostMirrorFinal.extent(0), hostMirrorFinal.extent(1), hostMirrorFinal.extent(2));
+            }();
+            size_t c0, c1, c2;
+            std::tie(c0, c1, c2) = comp_dims;
+
+            using CompView_t = Kokkos::View<double*, Kokkos::LayoutLeft, Kokkos::HostSpace>;
+            CompView_t comp_x("vf_comp_x", c0, c1, c2);
+            CompView_t comp_y("vf_comp_y", c0, c1, c2);
+            CompView_t comp_z("vf_comp_z", c0, c1, c2);
+
+            // Extract vector components by iterating over host-sequential data
+            for (size_t k = 0; k < c2; ++k)
+                for (size_t j = 0; j < c1; ++j)
+                    for (size_t i = 0; i < c0; ++i) {
+                        const auto& v = hostMirrorFinal(i, j, k);
+                        comp_x(i, j, k) = v[0];
+                        if constexpr (T::dim >= 2) comp_y(i, j, k) = v[1];
+                        if constexpr (T::dim >= 3) comp_z(i, j, k) = v[2];
+                    }
+            viewRegistry.set(label + "_vf_comp_x", comp_x);
+            if constexpr (T::dim >= 2) viewRegistry.set(label + "_vf_comp_y", comp_y);
+            if constexpr (T::dim >= 3) viewRegistry.set(label + "_vf_comp_z", comp_z);
+
+            // Contiguous, no stride
+            field_node["values/x"].set_external(comp_x.data(), n_elems);
+            if constexpr (T::dim >= 2) field_node["values/y"].set_external(comp_y.data(), n_elems);
+            if constexpr (T::dim >= 3) field_node["values/z"].set_external(comp_z.data(), n_elems);
         } 
         // else {
             // --- INVALID CASE ---
@@ -975,30 +1007,40 @@ void CatalystAdaptor::execute_entry(const T& entry, const std::string label)
             R_field["volume_dependent"].set_string("false");
 
 
+        // Create contiguous AOS->SOA views for coordinates and position attribute.
+        // The R_hostMirror stores data as Array-of-Structures (Vector<double,3>),
+        // but Conduit's set_external() with stride bytes creates a "strided" array
+        // layout that ParaView's vtkConduitArrayUtilities cannot convert to VTK.
+        // Flattening to contiguous (Struct-of-Arrays) views avoids the unsupported
+        // layout error entirely.
+        using CoordView_t = Kokkos::View<double*, Kokkos::HostSpace>;
+        CoordView_t coord_x("p_coord_x", localNum);
+        CoordView_t coord_y("p_coord_y", localNum);
+        CoordView_t coord_z("p_coord_z", localNum);
+
         if (localNum > 0)
-        {   
-            /* COORDINATE DEFINITION... */
-            data["coordsets/p_explicit_coords/values/x"].set_external(&R_hostMirror.data()[0][0], particleContainer->getLocalNum(), 0, R_stride_bytes);
-            data["coordsets/p_explicit_coords/values/y"].set_external(&R_hostMirror.data()[0][1], particleContainer->getLocalNum(), 0, R_stride_bytes);
-            data["coordsets/p_explicit_coords/values/z"].set_external(&R_hostMirror.data()[0][2], particleContainer->getLocalNum(), 0, R_stride_bytes);
-            
-            /* POSITION ATTRIBUTE */
-            R_field["values/x"].set_external(&R_hostMirror.data()[0][0], particleContainer->getLocalNum(), 0, R_stride_bytes);
-            R_field["values/y"].set_external(&R_hostMirror.data()[0][1], particleContainer->getLocalNum(), 0, R_stride_bytes);
-            R_field["values/z"].set_external(&R_hostMirror.data()[0][2], particleContainer->getLocalNum(), 0, R_stride_bytes);
-            
-            /* concept for no copy in situ vis would be */
-            //mesh["topologies/p_unstructured_topo/elements/connectivity"].set_external(particleContainer->ID.getView().data(),particleContainer->getLocalNum());
-        }else 
         {
-            // In case a rank has no particles-> data()[0] is nulllptr dereferencing !!!!!
-            using component_type = typename R_elem_t::value_type;
-            data["coordsets/p_explicit_coords/values/x"].set_external(static_cast<component_type*>(nullptr), 0);
-            data["coordsets/p_explicit_coords/values/y"].set_external(static_cast<component_type*>(nullptr), 0);
-            data["coordsets/p_explicit_coords/values/z"].set_external(static_cast<component_type*>(nullptr), 0);       
-            R_field["values/x"].set_external(static_cast<component_type*>(nullptr), 0);
-            R_field["values/y"].set_external(static_cast<component_type*>(nullptr), 0);
-            R_field["values/z"].set_external(static_cast<component_type*>(nullptr), 0);
+            for (size_t i = 0; i < localNum; ++i) {
+                coord_x(i) = R_hostMirror(i)[0];
+                coord_y(i) = R_hostMirror(i)[1];
+                coord_z(i) = R_hostMirror(i)[2];
+            }
+        }
+        viewRegistry.set(label + "_coord_x", coord_x);
+        viewRegistry.set(label + "_coord_y", coord_y);
+        viewRegistry.set(label + "_coord_z", coord_z);
+
+        if (localNum > 0)
+        {
+            /* COORDINATE DEFINITION -- contiguous, no stride */
+            data["coordsets/p_explicit_coords/values/x"].set_external(coord_x.data(), localNum);
+            data["coordsets/p_explicit_coords/values/y"].set_external(coord_y.data(), localNum);
+            data["coordsets/p_explicit_coords/values/z"].set_external(coord_z.data(), localNum);
+
+            /* POSITION ATTRIBUTE -- contiguous, no stride */
+            R_field["values/x"].set_external(coord_x.data(), localNum);
+            R_field["values/y"].set_external(coord_y.data(), localNum);
+            R_field["values/z"].set_external(coord_z.data(), localNum);
         }
 
 

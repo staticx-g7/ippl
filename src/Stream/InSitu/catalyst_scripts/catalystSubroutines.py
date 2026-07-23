@@ -1,4 +1,4 @@
-"""! \file catalystSubroutines.py
+r"""! \file catalystSubroutines.py
 \brief Helper utilities for Catalyst extractors and diagnostics.
 \details Provides logging helpers, proxy inspection, and convenience creators
 for extractors (e.g., VTPD). Intended for use by Catalyst pipeline/extractor
