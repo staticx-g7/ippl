@@ -945,8 +945,9 @@ void CatalystAdaptor::execute_entry(const T& entry, const std::string label)
         
         using IotaView_t = Kokkos::View<int64_t*, Kokkos::HostSpace>;
         using RankView_t = Kokkos::View<int*, Kokkos::HostSpace>;
-        IotaView_t iota_view("iota", localNum);
-        RankView_t rank_id_view("rank_id_view", localNum);
+        // Always reserve at least 1 element so data() is valid for Conduit set_external()
+        IotaView_t iota_view("iota", std::max(localNum, size_t(1)));
+        RankView_t rank_id_view("rank_id_view", std::max(localNum, size_t(1)));
         if (localNum > 0) {
             using HostExecSpace = Kokkos::DefaultHostExecutionSpace;
             Kokkos::RangePolicy<HostExecSpace> host_policy(0, localNum);
@@ -962,32 +963,21 @@ void CatalystAdaptor::execute_entry(const T& entry, const std::string label)
         viewRegistry.set(label + "_iota", iota_view);
         viewRegistry.set(label + "_rank_id", rank_id_view);
 
-            data["coordsets/p_explicit_coords/type"].set_string("explicit");
-            /* UNSTRUCTURED TOPOLOGY RELYING ON UNIQUE PARTICLE ID'S */
-            data["topologies/p_unstructured_topo/coordset"].set_string("p_explicit_coords");
-            data["topologies/p_unstructured_topo/type"].set_string("unstructured");
-            data["topologies/p_unstructured_topo/elements/shape"].set_string("point");
-            data["topologies/p_unstructured_topo/elements/connectivity"].set_external(iota_view.data(),particleContainer->getLocalNum());
-            //OLD bug !! only works rank 1 since it is supposed to be an index for access when global ids are passed access will be out of bounds!!!
-            // data["topologies/p_unstructured_topo/elements/connectivity"].set_external(ID_hostMirror.data(),particleContainer->getLocalNum()); 
-
-            
-            // this can be left hardcodeed or made part of the for loop, but more efficient to do it right here since we already have the hostView
-
-            /* Process ID ATTRIBUTE */
-            auto rank_field = fields["RankID"]; // You can name this anything
+        /* Process ID ATTRIBUTE */
+        {
+            auto rank_field = fields["RankID"];
             rank_field["association"].set_string("vertex");
             rank_field["topology"].set_string("p_unstructured_topo");
             rank_field["volume_dependent"].set_string("false");
             rank_field["values"].set_external(rank_id_view.data(), localNum);
             data["metadata/vtk_fields/RankID/attribute_type"].set_string("ProcessIds");
+        }
 
-            /* POSITION ATTRIBUTE */
-            auto R_field = fields["position"];
-            R_field["association"].set_string("vertex");
-            R_field["topology"].set_string("p_unstructured_topo");
-            R_field["volume_dependent"].set_string("false");
-
+        /* POSITION ATTRIBUTE */
+        auto R_field = fields["position"];
+        R_field["association"].set_string("vertex");
+        R_field["topology"].set_string("p_unstructured_topo");
+        R_field["volume_dependent"].set_string("false");
 
         // Create contiguous AOS->SOA views for coordinates and position attribute.
         // The R_hostMirror stores data as Array-of-Structures (Vector<double,3>),
@@ -996,12 +986,12 @@ void CatalystAdaptor::execute_entry(const T& entry, const std::string label)
         // Flattening to contiguous (Struct-of-Arrays) views avoids the unsupported
         // layout error entirely.
         using CoordView_t = Kokkos::View<double*, Kokkos::HostSpace>;
-        CoordView_t coord_x("p_coord_x", localNum);
-        CoordView_t coord_y("p_coord_y", localNum);
-        CoordView_t coord_z("p_coord_z", localNum);
+        // Always reserve at least 1 element so data() is valid for Conduit set_external()
+        CoordView_t coord_x("p_coord_x", std::max(localNum, size_t(1)));
+        CoordView_t coord_y("p_coord_y", std::max(localNum, size_t(1)));
+        CoordView_t coord_z("p_coord_z", std::max(localNum, size_t(1)));
 
-        if (localNum > 0)
-        {
+        if (localNum > 0) {
             for (size_t i = 0; i < localNum; ++i) {
                 coord_x(i) = R_hostMirror(i)[0];
                 coord_y(i) = R_hostMirror(i)[1];
@@ -1012,18 +1002,22 @@ void CatalystAdaptor::execute_entry(const T& entry, const std::string label)
         viewRegistry.set(label + "_coord_y", coord_y);
         viewRegistry.set(label + "_coord_z", coord_z);
 
-        if (localNum > 0)
-        {
-            /* COORDINATE DEFINITION -- contiguous, no stride */
-            data["coordsets/p_explicit_coords/values/x"].set_external(coord_x.data(), localNum);
-            data["coordsets/p_explicit_coords/values/y"].set_external(coord_y.data(), localNum);
-            data["coordsets/p_explicit_coords/values/z"].set_external(coord_z.data(), localNum);
+        // Always set coordset and position (even when localNum==0, Conduit needs the nodes)
+        data["coordsets/p_explicit_coords/type"].set_string("explicit");
+        data["topologies/p_unstructured_topo/coordset"].set_string("p_explicit_coords");
+        data["topologies/p_unstructured_topo/type"].set_string("unstructured");
+        data["topologies/p_unstructured_topo/elements/shape"].set_string("point");
+        data["topologies/p_unstructured_topo/elements/connectivity"].set_external(iota_view.data(), particleContainer->getLocalNum());
 
-            /* POSITION ATTRIBUTE -- contiguous, no stride */
-            R_field["values/x"].set_external(coord_x.data(), localNum);
-            R_field["values/y"].set_external(coord_y.data(), localNum);
-            R_field["values/z"].set_external(coord_z.data(), localNum);
-        }
+        /* COORDINATE DEFINITION -- contiguous, no stride */
+        data["coordsets/p_explicit_coords/values/x"].set_external(coord_x.data(), localNum);
+        data["coordsets/p_explicit_coords/values/y"].set_external(coord_y.data(), localNum);
+        data["coordsets/p_explicit_coords/values/z"].set_external(coord_z.data(), localNum);
+
+        /* POSITION ATTRIBUTE -- contiguous, no stride */
+        R_field["values/x"].set_external(coord_x.data(), localNum);
+        R_field["values/y"].set_external(coord_y.data(), localNum);
+        R_field["values/z"].set_external(coord_z.data(), localNum);
 
 
 
